@@ -20,7 +20,7 @@ space_out_colnames = function(x) {
 
 # load in the Downtown study areas
 downtowns = read_blob_data("Data/spatialfiles/downtowns.parquet", type = "geoparquet") %>%
-    mutate(across(where(is.character), ~{y = iconv(.x, from = "UTF-8", to = "windows-1252"); Encoding(y) = "UTF-8"; y}))
+    mutate(across(where(is.character), ~{y = iconv(.x, from = "UTF-8", to = "windows-1252"); Encoding(y) = "UTF-8"; y})) # nolint: line_length_linter.
 
 # vector of downtown study areas
 downtowns_vec = c("Calgary", "Charlottetown", "Edmonton", "Gatineau", "Halifax", 
@@ -31,6 +31,11 @@ downtowns_vec = c("Calgary", "Charlottetown", "Edmonton", "Gatineau", "Halifax",
 # filter the downtowns sf based on the vector
 downtowns_filtered = downtowns %>%
     filter(DTUID == "462660231" | DTNAME %in% downtowns_vec)
+
+
+# load cma file
+cmas = read_blob_data("Data/spatialfiles/cma.parquet", type = "geoparquet") %>%
+    mutate(across(where(is.character), ~{y = iconv(.x, from = "UTF-8", to = "windows-1252"); Encoding(y) = "UTF-8"; y}))
 
 # load demostats data
 message("loading: demostats")
@@ -45,8 +50,6 @@ businesses = read_blob_data("Data/eadata26/businesses/businesses_26.csv")
 naics = read_blob_data("Data/NAICS_codes_complete.csv")
 
 businesses = process_business_data(businesses, naics)
-
-================================================================================
 
 # vector of variables for foundational tab
 vars_vec = c("ECYALSQKM", "ECYBASPOP", "ECYBASHHD", "ECYPTAAVG", "ECYHSZAVG",
@@ -138,4 +141,55 @@ write_csv(transportation_cma, "./sdsc-data/outputs/transportation_data.csv")
 write_csv(housing_cma, "./sdsc-data/outputs/housing_data.csv")
 
 
-# Business data processing
+# intersect business data with the downtown boundaries
+dt_businesses = st_join(businesses, downtowns_filtered, join = st_intersects, left = FALSE)
+
+# calculate the number of businesses and employment
+dt_businesses_summary = dt_businesses %>%
+  st_drop_geometry() %>%
+  summarise(
+    BusinessCount = n(),
+    EmploymentCount = sum(`Employee Size Code`, na.rm = TRUE),
+    .by = DTNAME
+  )
+
+cmas_int = st_intersection(cmas, downtowns_filtered) %>%
+  distinct(CMAPUID, .keep_all = TRUE)
+cma_list = cmas_int %>%
+  st_drop_geometry() %>%
+  pull(CMAPUID)
+
+cma_filtered = cmas %>% filter(CMAPUID %in% cma_list)
+
+cma_businesses = st_join(businesses, cma_filtered, join = st_intersects, left = FALSE)
+
+# calculate the number of businesses and employment for the cma
+cma_businesses_summary = cma_businesses %>%
+  st_drop_geometry() %>%
+  summarise(
+    BusinessCount_cma = n(),
+    EmploymentCount_cma = sum(`Employee Size Code`, na.rm = TRUE),
+    .by = CMANAME
+  ) %>%
+  mutate(CMANAME = case_when(
+    CMANAME == "Ottawa - Gatineau (Ontario part / partie de l'Ontario)" ~ "Ottawa",
+    CMANAME == "Ottawa - Gatineau (partie du Québec / Quebec part)" ~ "Gatineau",
+    TRUE ~ CMANAME
+  ))
+
+# join to downtown data
+dt_cma_join = dt_businesses_summary %>%
+  left_join(cma_businesses_summary, by = c("DTNAME" = "CMANAME"))
+
+# calculate the business and employment shares
+dt_cma_join = dt_cma_join %>%
+  mutate(Business_share = BusinessCount / BusinessCount_cma * 100,
+        Employment_share = EmploymentCount / EmploymentCount_cma * 100)
+
+
+# export business data and layers
+write_csv(dt_cma_join, "./sdsc-data/outputs/business_employment_data.csv")
+st_write(cma_filtered, "./sdsc-data/outputs/cmas.geojson")
+st_write(downtowns_filtered, "./sdsc-data/outputs/downtowns.geojson")
+st_write(cma_businesses, "./sdsc-data/outputs/cma_businesses.geojson")
+st_write(dt_businesses, "./sdsc-data/outputs/dt_businesses.geojson")

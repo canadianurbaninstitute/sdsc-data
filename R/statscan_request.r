@@ -17,7 +17,7 @@ cma_dt_boundaries = st_read("./sdsc-data/data/cma_downtowns.geojson") %>%
     st_transform(crs = 3347)
 
 # join das to the downtown boundaries
-dt_boundaries_da_join = st_join(cma_dt_boundaries, dbs %>% select(DAUID), join = st_intersects, left = TRUE)
+dt_boundaries_da_join = st_join(cma_dt_boundaries, das %>% select(DAUID), join = st_intersects, left = TRUE)
 
 dt_boundaries_da_join = dt_boundaries_da_join %>%
     st_drop_geometry() %>%
